@@ -6,6 +6,12 @@ from tunnelnet.cabin import Cabin
 from tunnelnet.cable import Cable
 from tunnelnet.drain import Pit
 from tunnelnet.fire import Detector
+from tunnelnet.ledger import (
+    Device,
+    DeviceKind,
+    alias,
+    upsert,
+)
 
 from .runtime import Runtime
 
@@ -54,3 +60,41 @@ def seed_defaults(rt: Runtime) -> None:
     rt.cables.sample("cable-1", 47.0)
 
     rt.patrol.rebuild_route()
+
+    seed_ledger(rt)
+
+
+def seed_ledger(rt: Runtime) -> None:
+    """Register the existing devices once in the canonical ledger and activate.
+
+    Legacy subsystem ids are attached as aliases so the mismatched numbering
+    resolves onto one canonical id and therefore one activated version.
+    """
+
+    ledger = rt.ledger
+    changes = [
+        upsert(Device(id="cabin-1", kind=DeviceKind.CABIN, section="zone-1", name="cabin 1",
+                      adjacent=("pit-1", "cable-1", "detector-1"))),
+        upsert(Device(id="cabin-2", kind=DeviceKind.CABIN, section="zone-2", name="cabin 2",
+                      adjacent=("pit-2", "cable-2", "detector-2"))),
+        upsert(Device(id="cabin-3", kind=DeviceKind.CABIN, section="zone-3", name="cabin 3")),
+        upsert(Device(id="pit-1", kind=DeviceKind.PIT, section="zone-1",
+                      adjacent=("cabin-1",))),
+        upsert(Device(id="pit-2", kind=DeviceKind.PIT, section="zone-2",
+                      adjacent=("cabin-2",))),
+        upsert(Device(id="detector-1", kind=DeviceKind.SMOKE, section="zone-1",
+                      adjacent=("cabin-1",))),
+        upsert(Device(id="detector-2", kind=DeviceKind.SMOKE, section="zone-2",
+                      adjacent=("cabin-2",))),
+        upsert(Device(id="cable-1", kind=DeviceKind.CABLE, section="zone-1",
+                      adjacent=("cabin-1",))),
+        upsert(Device(id="cable-2", kind=DeviceKind.CABLE, section="zone-2",
+                      adjacent=("cabin-2",))),
+        # Legacy subsystem numbering mapped onto canonical ids.
+        alias("FC-1001", "fire", "detector-1"),
+        alias("PMP-PIT-01", "drain", "pit-1"),
+        alias("CBL-A", "cable", "cable-1"),
+    ]
+    ledger.commit(changes, author="seed", idempotency_key="seed-v1")
+    ledger.cutover()
+

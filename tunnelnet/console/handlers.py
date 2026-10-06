@@ -10,6 +10,17 @@ from tunnelnet.cable import danger_count, healthy_count, load_factor
 from tunnelnet.drain import Pit
 from tunnelnet.env import snapshot as env_snapshot
 from tunnelnet.fire import Detector
+from tunnelnet.ledger import (
+    ConflictError,
+    Device,
+    DeviceKind,
+    LedgerError,
+    alias as alias_change,
+    describe as ledger_describe,
+    retire as retire_change,
+    summarize as ledger_summarize,
+    upsert as upsert_change,
+)
 from tunnelnet.ns import Stage, control_chain
 from tunnelnet.reporting import audit_export, telemetry_export, to_csv
 from tunnelnet.reporting import store_export as store_csv_export
@@ -735,6 +746,214 @@ def suppression_list(server: "Server", request: Request) -> Response:
 def suppression_clear(server: "Server", request: Request) -> Response:
     server.runtime.suppression.clear()
     return json_response({"cleared": True, "count": server.runtime.suppression.count()})
+
+
+def ledger_summary(server: "Server", request: Request) -> Response:
+    service = server.runtime.ledger
+    snapshot = service.ledger.snapshot(active=True)
+    return json_response(
+        {
+            "summary": ledger_summarize(service).as_dict(),
+            "describe": ledger_describe(service),
+            "active_sequence": snapshot.sequence,
+            "active_digest": snapshot.digest,
+            "committed_sequence": service.ledger.committed_sequence,
+            "isolated": service.board.active_ids(),
+        }
+    )
+
+
+def ledger_devices(server: "Server", request: Request) -> Response:
+    service = server.runtime.ledger
+    include_retired = request.query_field("retired") == "1"
+    projection = service.ledger.active()
+    devices = projection.devices(include_retired=include_retired)
+    section = request.query_field("section")
+    if section:
+        devices = projection.in_section(section)
+    payload_devices = []
+    for device in devices:
+        body = device.as_dict()
+        body["isolated"] = service.board.is_isolated(device.id)
+        payload_devices.append(body)
+    return json_response(
+        {
+            "sequence": service.ledger.active_sequence,
+            "digest": service.ledger.snapshot(active=True).digest,
+            "items": payload_devices,
+            "count": len(payload_devices),
+        }
+    )
+
+
+def ledger_history(server: "Server", request: Request) -> Response:
+    ledger = server.runtime.ledger.ledger
+    change_sets = ledger.history()
+    return json_response(
+        {
+            "items": [change_set.as_dict() for change_set in change_sets],
+            "count": len(change_sets),
+            "chain_ok": ledger.verify_chain(),
+        }
+    )
+
+
+def ledger_ownership(server: "Server", request: Request) -> Response:
+    device_id = request.query_field("id")
+    if not device_id:
+        raise RequestError(400, "id is required")
+    ledger = server.runtime.ledger.ledger
+    # Look in the head projection so removed devices are still resolvable.
+    device = ledger.head().get(device_id)
+    payload: dict[str, object] = {
+        "id": device_id,
+        "exists": device is not None,
+        "device": None if device is None else device.as_dict(),
+        "ownership": ledger.device_ownership(device_id),
+    }
+    return json_response(payload)
+
+
+def ledger_consumers(server: "Server", request: Request) -> Response:
+    service = server.runtime.ledger
+    return json_response(
+        {
+            "active_sequence": service.ledger.active_sequence,
+            "consumers": service.fanout.states(),
+        }
+    )
+
+
+def _parse_device(payload: dict[str, object]) -> Device:
+    device_id = str(payload.get("id", ""))
+    kind_value = str(payload.get("kind", ""))
+    try:
+        kind = DeviceKind(kind_value)
+    except ValueError:
+        raise RequestError(400, f"unknown kind {kind_value!r}")
+    raw_adjacent = payload.get("adjacent", [])
+    if not isinstance(raw_adjacent, list):
+        raise RequestError(400, "adjacent must be a list")
+    return Device(
+        id=device_id,
+        kind=kind,
+        section=str(payload.get("section", "")),
+        name=str(payload.get("name", "")),
+        adjacent=tuple(str(item) for item in raw_adjacent),
+    )
+
+
+def ledger_commit(server: "Server", request: Request) -> Response:
+    service = server.runtime.ledger
+    changes = []
+
+    raw_devices = request.payload.get("devices", [])
+    if raw_devices:
+        if not isinstance(raw_devices, list):
+            raise RequestError(400, "devices must be a list")
+        for body in raw_devices:
+            if not isinstance(body, dict):
+                raise RequestError(400, "each device must be an object")
+            changes.append(upsert_change(_parse_device(body)))
+
+    single_id = request.str_field("id")
+    if single_id and not raw_devices:
+        changes.append(upsert_change(_parse_device(request.payload)))
+
+    raw_aliases = request.payload.get("aliases", [])
+    if raw_aliases:
+        if not isinstance(raw_aliases, list):
+            raise RequestError(400, "aliases must be a list")
+        for body in raw_aliases:
+            if not isinstance(body, dict):
+                raise RequestError(400, "each alias must be an object")
+            changes.append(
+                alias_change(
+                    str(body.get("alias", "")),
+                    str(body.get("system", "")),
+                    str(body.get("device_id", "")),
+                )
+            )
+
+    if not changes:
+        raise RequestError(400, "commit needs devices or aliases")
+
+    base = request.payload.get("base_sequence")
+    base_sequence = None if base is None else int(base)
+    try:
+        change_set = service.commit(
+            changes,
+            author=request.str_field("author", "console"),
+            base_sequence=base_sequence,
+            idempotency_key=request.str_field("idempotency_key"),
+        )
+    except ConflictError as exc:
+        raise RequestError(409, str(exc))
+    except (LedgerError, ValueError) as exc:
+        raise RequestError(400, str(exc))
+    return json_response(
+        {
+            "committed": change_set.as_dict(),
+            "committed_sequence": service.ledger.committed_sequence,
+            "active_sequence": service.ledger.active_sequence,
+            "pending": len(service.pending()),
+        }
+    )
+
+
+def ledger_retire(server: "Server", request: Request) -> Response:
+    service = server.runtime.ledger
+    device_id = request.str_field("id")
+    if not device_id:
+        raise RequestError(400, "id is required")
+    try:
+        change_set = service.commit(
+            [retire_change(device_id)],
+            author=request.str_field("author", "console"),
+            idempotency_key=request.str_field("idempotency_key"),
+        )
+    except (LedgerError, ValueError) as exc:
+        raise RequestError(400, str(exc))
+    return json_response({"committed": change_set.as_dict(), "pending": len(service.pending())})
+
+
+def ledger_cutover(server: "Server", request: Request) -> Response:
+    service = server.runtime.ledger
+    raw_target = request.payload.get("target_sequence")
+    target = None if raw_target is None else int(raw_target)
+    try:
+        result = service.cutover(target_sequence=target)
+    except ValueError as exc:
+        raise RequestError(400, str(exc))
+    record_event(server.runtime, "ledger_cutover", f"v{result['activated_sequence']}")
+    return json_response(result)
+
+
+def ledger_recover(server: "Server", request: Request) -> Response:
+    return json_response(server.runtime.ledger.recover())
+
+
+def ledger_isolate(server: "Server", request: Request) -> Response:
+    device_id = request.str_field("id")
+    if not device_id:
+        raise RequestError(400, "id is required")
+    result = server.runtime.ledger.isolate(
+        device_id,
+        author=request.str_field("author", "console"),
+        reason=request.str_field("reason", "physical removal"),
+    )
+    record_event(server.runtime, "ledger_isolate", device_id)
+    return json_response(result)
+
+
+def ledger_release(server: "Server", request: Request) -> Response:
+    device_id = request.str_field("id")
+    if not device_id:
+        raise RequestError(400, "id is required")
+    result = server.runtime.ledger.release(device_id, author=request.str_field("author", "console"))
+    if not result["lifted"]:
+        raise RequestError(404, f"device {device_id} is not isolated")
+    return json_response(result)
 
 
 def store_stats(server: "Server", request: Request) -> Response:

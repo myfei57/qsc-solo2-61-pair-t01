@@ -77,4 +77,19 @@ def run_checks(rt: "Runtime") -> list[dict[str, str]]:
     )
 
     checks.append({"name": "audit", "status": "ok", "detail": f"records={rt.audit.count()}"})
+
+    from tunnelnet.ledger import summarize as ledger_summarize
+
+    ledger = ledger_summarize(rt.ledger)
+    status = "ok" if ledger.consumers_current == ledger.consumers else "warn"
+    checks.append(
+        {
+            "name": "ledger",
+            "status": status,
+            "detail": (
+                f"active=v{ledger.active_sequence} committed=v{ledger.committed_sequence} "
+                f"pending={ledger.pending_changes} consumers={ledger.consumers_current}/{ledger.consumers}"
+            ),
+        }
+    )
     return checks

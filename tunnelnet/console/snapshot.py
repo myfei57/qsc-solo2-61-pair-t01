@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from tunnelnet.ns import control_chain
+from tunnelnet.ledger import summarize as ledger_summarize
 from tunnelnet.store import store_state
 
 if TYPE_CHECKING:  # pragma: no cover - imported only for type checkers
@@ -30,4 +31,8 @@ def collect(rt: "Runtime") -> dict[str, object]:
         "cables": rt.cables.summary().as_dict(),
         "suppression": {"zones": rt.suppression.distinct_zones()},
         "audit": rt.audit.state().as_dict(),
+        "ledger": {
+            "summary": ledger_summarize(rt.ledger).as_dict(),
+            "active": rt.ledger.ledger.snapshot(active=True).as_dict(),
+        },
     }

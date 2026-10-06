@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>统一设备底册 · tunnelnet</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 24px; }
+    h1 { font-size: 20px; }
+    nav a { margin-right: 16px; }
+    .cards { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+    .card { border: 1px solid #8884; border-radius: 8px; padding: 10px 14px; min-width: 120px; }
+    .card .k { font-size: 12px; opacity: .7; }
+    .card .v { font-size: 20px; font-weight: 600; }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+    th, td { border: 1px solid #8884; padding: 6px 8px; text-align: left; font-size: 13px; }
+    .muted { opacity: .65; }
+    .tag { border-radius: 4px; padding: 1px 6px; font-size: 11px; }
+    .retired { background: #b001; }
+    .isolated { background: #e802; }
+    .pending { background: #e802; }
+  </style>
+</head>
+<body>
+  <h1>统一设备底册（舱室 / 泵坑 / 烟感 / 电缆）</h1>
+  <nav>
+    <a href="/cabins">舱室</a>
+    <a href="/env">环境</a>
+    <a href="/alarms">消防告警</a>
+    <a href="/patrols">巡检</a>
+    <a href="/ledger">底册</a>
+  </nav>
+  <p class="muted">
+    在跑联动（环境路由 / 消防联动 / 审计 / 控制台）读取同一个<b>生效版本</b>；
+    登记的改动先进入待激活版本，本班收尾 cutover 后原子生效。物理拆走设备请立即“安全隔离”。
+  </p>
+
+  <div class="cards" id="cards"></div>
+
+  <h2>生效版本设备 <span class="muted" id="version"></span></h2>
+  <table>
+    <thead>
+      <tr><th>编号</th><th>类型</th><th>区段</th><th>名称</th><th>相邻</th><th>状态</th></tr>
+    </thead>
+    <tbody id="devices"></tbody>
+  </table>
+
+  <h2>待激活变更（跨班交接）</h2>
+  <table>
+    <thead><tr><th>版本</th><th>作者</th><th>时间</th><th>涉及设备</th></tr></thead>
+    <tbody id="pending"></tbody>
+  </table>
+
+  <script>
+    async function getJSON(url) {
+      const res = await fetch(url, { headers: { "Accept": "application/json" } });
+      return res.json();
+    }
+    function card(k, v) {
+      return `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+    }
+    async function load() {
+      const [summary, devices, consumers] = await Promise.all([
+        getJSON("/api/ledger"),
+        getJSON("/api/ledger/devices?retired=1"),
+        getJSON("/api/ledger/consumers"),
+      ]);
+      const s = summary.summary;
+      document.getElementById("cards").innerHTML =
+        card("生效版本", "v" + summary.active_sequence) +
+        card("已提交版本", "v" + summary.committed_sequence) +
+        card("待激活变更", s.pending_changes) +
+        card("在用设备", s.active_devices) +
+        card("已拆走(留档)", s.retired_devices) +
+        card("已隔离", s.isolated) +
+        card("消费者同步", s.consumers_current + "/" + s.consumers);
+      document.getElementById("version").textContent =
+        "#" + summary.active_sequence + " " + summary.active_digest.slice(0, 12);
+
+      document.getElementById("devices").innerHTML = devices.items.map((d) => {
+        const tags = [];
+        if (d.retired) tags.push('<span class="tag retired">已拆走</span>');
+        if (d.isolated) tags.push('<span class="tag isolated">已隔离</span>');
+        return `<tr>
+          <td>${d.id}</td><td>${d.kind}</td><td>${d.section}</td>
+          <td>${d.name || ""}</td><td class="muted">${(d.adjacent || []).join(", ")}</td>
+          <td>${tags.join(" ")}</td>
+        </tr>`;
+      }).join("");
+
+      const history = await getJSON("/api/ledger/history");
+      const active = summary.active_sequence;
+      const pend = history.items.filter((c) => c.sequence > active);
+      document.getElementById("pending").innerHTML = pend.length
+        ? pend.map((c) => `<tr>
+            <td><span class="tag pending">v${c.sequence}</span></td>
+            <td>${c.author}</td><td>${c.at}</td>
+            <td class="muted">${[...new Set(c.changes.map((x) => x.device_id))].join(", ")}</td>
+          </tr>`).join("")
+        : '<tr><td colspan="4" class="muted">无待激活变更</td></tr>';
+    }
+    load().catch((e) => {
+      document.getElementById("cards").textContent = "加载失败: " + e;
+    });
+  </script>
+</body>
+</html>

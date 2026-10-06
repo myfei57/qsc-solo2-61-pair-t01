@@ -55,7 +55,7 @@ class ConsoleCase(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(
             {check["name"] for check in checks["checks"]},
-            {"store", "access", "drain", "ventilation", "fire", "patrol", "quota", "cables", "environment", "audit"},
+            {"store", "access", "drain", "ventilation", "fire", "patrol", "quota", "cables", "environment", "audit", "ledger"},
         )
 
         status, snapshot = self.call("GET", "/api/snapshot")
@@ -78,6 +78,7 @@ class ConsoleCase(unittest.TestCase):
                 "cables",
                 "suppression",
                 "audit",
+                "ledger",
             },
         )
 
