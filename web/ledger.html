@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设备底册</title>
+<style>
+body { font-family: system-ui, sans-serif; margin: 2rem; color: #1b1f24; }
+nav a { margin-right: 1rem; color: #0b5fff; text-decoration: none; }
+table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+th, td { border: 1px solid #d0d7de; padding: 0.4rem 0.6rem; text-align: left; font-size: 0.92rem; }
+th { background: #f6f8fa; }
+.badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 1rem; font-size: 0.8rem; }
+.active { background: #dafbe1; color: #116329; }
+.degraded { background: #ffebe9; color: #cf222e; }
+.lagging { background: #fff8c5; color: #9a6700; }
+.retired { color: #8c959f; text-decoration: line-through; }
+code { background: #f6f8fa; padding: 0 0.25rem; border-radius: 0.25rem; }
+</style>
+</head>
+<body>
+<nav><a href="/cabins">Cabins</a><a href="/env">Environment</a><a href="/patrols">Patrols</a><a href="/alarms">Alarms</a><a href="/ledger">底册</a></nav>
+<h1>统一设备底册</h1>
+<p id="version"></p>
+<h2>在跑联动版本（同一版本才能动作）</h2>
+<table>
+  <thead><tr><th>子系统</th><th>持有版本</th><th>状态</th><th>错误</th></tr></thead>
+  <tbody id="consumers"></tbody>
+</table>
+<h2>设备与相邻关系</h2>
+<table>
+  <thead><tr><th>终身编号</th><th>类型</th><th>位置编号</th><th>区段</th><th>相邻</th><th>旧编号</th><th>状态</th></tr></thead>
+  <tbody id="devices"></tbody>
+</table>
+<h2>跨班未闭环工单</h2>
+<ul id="orders"></ul>
+<script>
+async function load() {
+  const status = await (await fetch("/api/ledger")).json();
+  document.getElementById("version").innerHTML =
+    `底册版本 <code>${status.version}</code> · 安全联动水位 <code>${status.active_version}</code>` +
+    (status.degraded.length ? ` · <span class="badge degraded">降级: ${status.degraded.join(", ")}</span>`
+                            : ` · <span class="badge active">四个读取方一致</span>`);
+  document.getElementById("consumers").innerHTML = status.consumers.map((c) =>
+    `<tr><td>${c.name}</td><td>${c.version}</td>` +
+    `<td><span class="badge ${c.status}">${c.status}</span></td>` +
+    `<td>${c.last_error || ""}</td></tr>`).join("");
+
+  const data = await (await fetch("/api/ledger/devices?include_retired=1")).json();
+  document.getElementById("devices").innerHTML = data.devices.map((d) =>
+    `<tr${d.retired ? ' class="retired"' : ""}><td>${d.id}</td><td>${d.kind}</td>` +
+    `<td>${d.code}</td><td>${d.segment}</td>` +
+    `<td>${d.adjacent.join(", ")}</td><td>${d.aliases.join(", ")}</td>` +
+    `<td>${d.retired ? "已拆走（历史不可改）" : "在册"}</td></tr>`).join("");
+
+  document.getElementById("orders").innerHTML =
+    (status.open_orders.length === 0 ? "<li>无在途工单</li>" :
+      status.open_orders.map((o) =>
+        `<li>${o.work_order} @ ${o.segments.join(", ")}` +
+        (o.manual_watch ? ` <span class="badge lagging">人工值守（${o.confirmed_by} 已确认跨班）</span>` : "") +
+        "</li>").join(""));
+}
+load();
+</script>
+</body>
+</html>

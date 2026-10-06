@@ -9,6 +9,7 @@ from tunnelnet.cable import CableRegistry, MovingAverage
 from tunnelnet.drain import DrainService, PumpUnit
 from tunnelnet.env import Environment
 from tunnelnet.fire import FireService
+from tunnelnet.ledger import Ledger, LedgerService
 from tunnelnet.ns import Registry as NamespaceRegistry
 from tunnelnet.patrol import PatrolService
 from tunnelnet.quota import QuotaService
@@ -41,3 +42,6 @@ class Runtime:
         self.power_book = PowerBook()
         self.quota = QuotaService(self.cabins, self.power_book)
         self.audit = AuditRegistry()
+        # Unified equipment ledger, replayed from the store and activated
+        # across the same four readers: env routing, fire linkage, audit, page.
+        self.ledger_book = LedgerService(Ledger(store))

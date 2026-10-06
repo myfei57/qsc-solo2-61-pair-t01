@@ -78,6 +78,7 @@ class ConsoleCase(unittest.TestCase):
                 "cables",
                 "suppression",
                 "audit",
+                "ledger",
             },
         )
 

@@ -127,11 +127,46 @@ def route_table() -> list[Route]:
         Route("GET", "/api/export/audit", "audit trail as CSV", "export_audit"),
         Route("GET", "/api/export/telemetry", "telemetry counters as CSV", "export_telemetry"),
         Route("GET", "/api/export/store", "store record counts as CSV", "export_store"),
+        Route("GET", "/api/ledger", "unified ledger version and activation status", "ledger_status"),
+        Route("GET", "/api/ledger/devices", "registered devices and adjacency", "ledger_devices"),
+        Route("GET", "/api/ledger/device", "one device with its full history", "ledger_device"),
+        Route("GET", "/api/ledger/segments", "segments named in the ledger", "ledger_segments"),
+        Route("GET", "/api/ledger/delta", "changed block since a base version", "ledger_delta"),
+        Route("GET", "/api/ledger/snapshot", "full register at one version", "ledger_snapshot"),
+        Route("GET", "/api/ledger/activation", "per-subsystem activation state", "ledger_activation"),
+        Route("POST", "/api/ledger/commit", "commit and immediately activate a work order", "ledger_commit"),
+        Route("POST", "/api/ledger/recover", "retry one failed subsystem projection", "ledger_recover"),
+        Route("POST", "/api/ledger/resync", "rebuild one projection from the snapshot", "ledger_resync"),
+        Route("POST", "/api/ledger/verify", "check one projection digest against the ledger", "ledger_verify"),
+        Route("POST", "/api/ledger/accept", "acknowledge a carried-over cross-shift order", "ledger_accept"),
+        Route("POST", "/api/ledger/handover", "hand over the shift, refusing open changes", "ledger_handover"),
     ]
+
+
+# Handlers that live in the dedicated ledger console module rather than the
+# general handler module.
+_LEDGER_HANDLERS = {
+    "ledger_status",
+    "ledger_devices",
+    "ledger_device",
+    "ledger_segments",
+    "ledger_delta",
+    "ledger_snapshot",
+    "ledger_activation",
+    "ledger_commit",
+    "ledger_recover",
+    "ledger_resync",
+    "ledger_verify",
+    "ledger_accept",
+    "ledger_handover",
+}
 
 
 def register_routes(router: Router, handlers: ModuleType) -> None:
     """Bind every catalogued route to its handler function."""
 
+    from . import ledger_console
+
     for route in route_table():
-        router.add(route.method, route.path, getattr(handlers, route.handler))
+        module = ledger_console if route.handler in _LEDGER_HANDLERS else handlers
+        router.add(route.method, route.path, getattr(module, route.handler))
